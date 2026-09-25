@@ -1,4 +1,6 @@
-import { error } from "@/lib/server/http";
+import { json, readJson, validationError, withAuth } from "@/lib/server/http";
+import { createJobSchema } from "@/lib/schemas";
+import { createJob, listJobs } from "@/lib/server/store";
 
 // ---------------------------------------------------------------------------
 // TASK 2 — TODO(candidate): implement both handlers.
@@ -30,10 +32,18 @@ import { error } from "@/lib/server/http";
 //   curl -i localhost:3000/api/jobs -H "authorization: Bearer $TOKEN" \
 //     -H 'content-type: application/json' -d '{"sourceUrl":"nope"}'                   # expect 422
 
-export async function GET(_req: Request) {
-  return error(501, "Not implemented: GET /api/jobs");
+export async function GET(req: Request) {
+  return withAuth(req, () => {
+    return json(listJobs());
+  });
 }
 
-export async function POST(_req: Request) {
-  return error(501, "Not implemented: POST /api/jobs");
+export async function POST(req: Request) {
+  return withAuth(req, async () => {
+    const parsed = createJobSchema.safeParse(await readJson(req));
+    if (!parsed.success) return validationError(parsed.error);
+
+    const job = createJob(parsed.data);
+    return json(job, 201);
+  });
 }
