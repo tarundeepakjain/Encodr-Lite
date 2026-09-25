@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { TIMELINE, type EncodeResult, type EncodeRun, type Job, type JobStatus } from "@/lib/types";
+import { TIMELINE, type EncodeResult, type EncodeRun, type Job, type JobStatus, type Stage } from "@/lib/types";
 
 // Our "database" is two Maps held in memory. `next dev` is a single Node process, so this is fine
 // for the exercise. Restarting the dev server wipes everything — that's expected, don't work around it.
@@ -53,7 +53,46 @@ export const FAIL_URL = "https://cdn.example.com/videos/corrupt.mp4";
  * the failing URL), watch them fail, then make them pass.
  */
 export function computeRun(record: RunRecord, now: number = Date.now()): EncodeRun {
-  throw new Error("Not implemented: computeRun (see TODO above)");
+  const elapsed = Math.max(0, now - record.startedAt);
+  const totalMs = TIMELINE.transcodingEndsMs;
+
+  let stage: Stage;
+  let message: string;
+  let error: string | undefined;
+  let result: EncodeResult | undefined;
+  let progressElapsed = Math.min(elapsed, totalMs);
+
+  if (record.sourceUrl === FAIL_URL && elapsed >= TIMELINE.failAtMs) {
+    stage = "FAILED";
+    message = "Transcoding failed: corrupt source media";
+    error = "Corrupt source file: stream decode error at 00:08";
+    progressElapsed = TIMELINE.failAtMs;
+  } else if (elapsed < TIMELINE.queuedEndsMs) {
+    stage = "QUEUED";
+    message = "Queued and waiting for an available worker…";
+  } else if (elapsed < TIMELINE.downloadingEndsMs) {
+    stage = "DOWNLOADING";
+    message = "Downloading source media file…";
+  } else if (elapsed < totalMs) {
+    stage = "TRANSCODING";
+    message = "Transcoding video into multiple renditions…";
+  } else {
+    stage = "COMPLETED";
+    message = "Encode completed successfully";
+    result = makeResult();
+  }
+
+  const progressPct = stage === "COMPLETED" ? 100 : Math.floor((progressElapsed / totalMs) * 100);
+
+  return {
+    id: record.id,
+    jobId: record.jobId,
+    stage,
+    progressPct,
+    message,
+    ...(error ? { error } : {}),
+    ...(result ? { result } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
