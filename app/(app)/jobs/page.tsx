@@ -1,7 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { useJobs } from "@/lib/client/hooks";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useCreateJob, useJobs } from "@/lib/client/hooks";
+import { createJobSchema, type CreateJobInput } from "@/lib/schemas";
+import { ApiError } from "@/lib/client/api";
 import { StatusBadge } from "@/components/status-badge";
 
 // The list half of this page is provided and will light up as soon as GET /api/jobs works
@@ -31,14 +36,89 @@ import { StatusBadge } from "@/components/status-badge";
 // partway through its run, so you can build the error path on the detail page.
 export default function JobsPage() {
   const jobs = useJobs();
+  const createJob = useCreateJob();
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setError,
+    formState: { errors, isSubmitting },
+  } = useForm<CreateJobInput>({
+    resolver: zodResolver(createJobSchema),
+    defaultValues: { sourceUrl: "", title: "" },
+  });
+
+  const onSubmit = handleSubmit(async (values) => {
+    setFormError(null);
+    try {
+      await createJob.mutateAsync(values);
+      reset();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 422 && err.fieldErrors) {
+        for (const [field, messages] of Object.entries(err.fieldErrors)) {
+          if (field === "sourceUrl" || field === "title") {
+            setError(field, { message: messages[0] });
+          } else {
+            setFormError(messages[0]);
+          }
+        }
+      } else {
+        setFormError(err instanceof Error ? err.message : "Failed to create job");
+      }
+    }
+  });
+
+  const isPending = isSubmitting || createJob.isPending;
 
   return (
     <div className="space-y-8">
       <section>
         <h1 className="mb-4 text-xl font-semibold">New encode job</h1>
-        <p className="rounded-md border border-dashed border-neutral-300 p-4 text-sm text-neutral-500">
-          TODO(candidate): the create-job form goes here.
-        </p>
+        <form onSubmit={onSubmit} className="rounded-md border border-neutral-200 p-4 space-y-4" noValidate>
+          <div>
+            <label htmlFor="sourceUrl" className="mb-1 block text-sm font-medium">
+              Source URL
+            </label>
+            <input
+              id="sourceUrl"
+              {...register("sourceUrl")}
+              type="text"
+              placeholder="https://cdn.example.com/videos/clip.mp4"
+              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            {errors.sourceUrl && (
+              <p className="mt-1 text-xs text-red-600">{errors.sourceUrl.message}</p>
+            )}
+          </div>
+
+          <div>
+            <label htmlFor="title" className="mb-1 block text-sm font-medium">
+              Title <span className="text-xs font-normal text-neutral-400">(optional)</span>
+            </label>
+            <input
+              id="title"
+              {...register("title")}
+              type="text"
+              placeholder="e.g. Vacation clip"
+              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            {errors.title && (
+              <p className="mt-1 text-xs text-red-600">{errors.title.message}</p>
+            )}
+          </div>
+
+          {formError && <p className="text-sm text-red-600">{formError}</p>}
+
+          <button
+            type="submit"
+            disabled={isPending}
+            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {isPending ? "Creating job…" : "Create job"}
+          </button>
+        </form>
       </section>
 
       <section>
