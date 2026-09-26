@@ -84,7 +84,7 @@ export function useRunPolling(runId: string | null, onFinished?: () => void): Ru
     setState(initialState);
 
     async function fetchRun() {
-      console.log("[useRunPolling] polling runId:", runId);
+      //console.log("[useRunPolling] polling runId:", runId);
 
       try {
         const run = await api.get<EncodeRun>(`/api/runs/${runId}`);
