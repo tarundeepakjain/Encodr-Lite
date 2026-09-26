@@ -14,10 +14,33 @@ import type { EncodeRun } from "@/lib/types";
 // TASK 5 — TODO(candidate): build the run panel where the placeholder is.
 // ---------------------------------------------------------------------------
 //
-// State model: a single discriminated union — "idle" | "running" | "failed" | "completed".
-// This makes `isRunning && isFailed` impossible to express, not just unlikely.
+// This is the most substantial screen in the exercise. Build it in this order:
+//
+//   1. A "Start encode" button that calls the provided useStartRun(job.id) mutation and keeps
+//      the returned `runId` in state. Disable it while a run is in flight.
+//
+//   2. Live progress, driven by your useRunPolling(runId) hook:
+//        - the current stage (<StatusBadge value={run.stage} />),
+//        - a percentage bar (<ProgressBar value={run.progressPct} />),
+//        - the log — the messages collected so far, newest last.
+//      A run takes about 12 seconds, so you'll see the whole thing without waiting long.
+//
+//   3. The FAILED case. Create a job with the source URL
+//        https://cdn.example.com/videos/corrupt.mp4
+//      and it will fail partway. Show the error message clearly (a red panel, `failed` on the
+//      progress bar) and offer a Retry that starts a fresh run.
+//
+//   4. The COMPLETED case. `run.result` arrives with the final poll: show the duration and a
+//      small table of renditions (label / resolution / size). Plain and readable beats fancy.
+//
+// A note on state: at any moment this screen is in exactly one of — idle, running, failed,
+// completed. Try to make that explicit in how you write it, rather than juggling several
+// booleans that could contradict each other (`isRunning && isFailed` should be impossible to
+// express, not merely unlikely). Say what you chose in the README.
+//
+// We are NOT grading visual design. Correct behaviour and readable code are what count.
 
-// ── Discriminated union ────────────────────────────────────────────────────
+// ── Discriminated union: exactly one mode at a time ───────────────────────
 type RunPanelMode =
   | { mode: "idle" }
   | { mode: "running";   run: EncodeRun; log: string[] }
@@ -32,27 +55,25 @@ function RunLog({ log }: { log: string[] }) {
       <p className="mb-1 text-xs font-medium text-neutral-400 uppercase tracking-wide">Log</p>
       <ul className="space-y-0.5">
         {log.map((msg, i) => (
-          <li key={i} className="text-xs text-neutral-600 font-mono">
-            {msg}
-          </li>
+          <li key={i} className="text-xs text-neutral-600 font-mono">{msg}</li>
         ))}
       </ul>
     </div>
   );
 }
 
-// ── Run panel — all hooks live here so they're never called conditionally ──
+// ── Run panel (all hooks unconditional) ──────────────────────────────────
 function RunPanel({ jobId, onRunFinished }: { jobId: string; onRunFinished: () => void }) {
+  // 1. Keep the returned runId in state
   const [runId, setRunId] = useState<string | null>(null);
   const startRun = useStartRun(jobId);
-  const { run, polling, fetchError, log } = useRunPolling(runId, onRunFinished);
+  const { run, fetchError, log } = useRunPolling(runId, onRunFinished);
 
-  // Derive one explicit mode from hook output
+  // Single explicit mode — isRunning && isFailed is impossible to express
   const panelMode: RunPanelMode = (() => {
-    if (!run)                      return { mode: "idle" };
-    if (run.stage === "FAILED")    return { mode: "failed",    run, log };
-    if (run.stage === "COMPLETED") return { mode: "completed", run, log };
-    if (polling)                   return { mode: "running",   run, log };
+    if (run?.stage === "FAILED")    return { mode: "failed",    run, log };
+    if (run?.stage === "COMPLETED") return { mode: "completed", run, log };
+    if (run)                        return { mode: "running",   run, log };
     return { mode: "idle" };
   })();
 
@@ -66,14 +87,14 @@ function RunPanel({ jobId, onRunFinished }: { jobId: string; onRunFinished: () =
   }
 
   function handleRetry() {
-    setRunId(null); // clear stale polling state before starting fresh
+    setRunId(null);   // drop stale run data
     handleStart();
   }
 
   return (
     <div className="rounded-md border border-neutral-200 p-4 space-y-4">
 
-      {/* ── IDLE ── */}
+      {/* 1. IDLE — Start encode button */}
       {panelMode.mode === "idle" && (
         <div className="space-y-2">
           <button
@@ -89,11 +110,10 @@ function RunPanel({ jobId, onRunFinished }: { jobId: string; onRunFinished: () =
               {startRun.error instanceof Error ? startRun.error.message : "Failed to start encode"}
             </p>
           )}
-          <p className="text-sm text-neutral-400">Press "Start encode" to begin transcoding.</p>
         </div>
       )}
 
-      {/* ── RUNNING ── */}
+      {/* 2. RUNNING — stage badge, progress bar, log */}
       {panelMode.mode === "running" && (
         <div className="space-y-3">
           <div className="flex items-center gap-3">
@@ -106,7 +126,7 @@ function RunPanel({ jobId, onRunFinished }: { jobId: string; onRunFinished: () =
         </div>
       )}
 
-      {/* ── FAILED ── */}
+      {/* 3. FAILED — red panel, failed progress bar, Retry */}
       {panelMode.mode === "failed" && (
         <div className="space-y-3">
           <ProgressBar value={panelMode.run.progressPct} failed />
@@ -128,7 +148,7 @@ function RunPanel({ jobId, onRunFinished }: { jobId: string; onRunFinished: () =
         </div>
       )}
 
-      {/* ── COMPLETED ── */}
+      {/* 4. COMPLETED — duration + renditions table */}
       {panelMode.mode === "completed" && (
         <div className="space-y-3">
           <ProgressBar value={100} />
@@ -167,7 +187,7 @@ function RunPanel({ jobId, onRunFinished }: { jobId: string; onRunFinished: () =
   );
 }
 
-// ── Page component ────────────────────────────────────────────────────────
+// ── Page shell ────────────────────────────────────────────────────────────
 export default function JobDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const jobQuery = useJob(id);
@@ -180,9 +200,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
     return (
       <div className="text-sm text-red-600">
         Job not found.{" "}
-        <Link href="/jobs" className="underline">
-          Back to jobs
-        </Link>
+        <Link href="/jobs" className="underline">Back to jobs</Link>
       </div>
     );
   }
