@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { isTerminalStage } from "@/lib/types";
+import { api } from "@/lib/client/api";
 import type { EncodeRun } from "@/lib/types";
 
 export interface RunPollingState {
@@ -66,12 +68,72 @@ const initialState: RunPollingState = {
  * isn't working — and this is exactly the bug we'll ask you about in the interview.
  */
 export function useRunPolling(runId: string | null, onFinished?: () => void): RunPollingState {
-  const [state] = useState<RunPollingState>(initialState);
+  const [state, setState] = useState<RunPollingState>(initialState);
+
+  // Keep onFinished stable — if it were in the dep array, a new inline arrow
+  // from the parent would restart the interval on every render.
+  const onFinishedRef = useRef(onFinished);
+  onFinishedRef.current = onFinished;
 
   useEffect(() => {
-    if (!runId) return;
-    // TODO(candidate): start polling here, and return a cleanup function.
-  }, [runId]);
+    if (!runId) return; // Requirement 1: do nothing when no runId
+
+    let cancelled = false; // guard: don't write state after unmount / runId change
+
+    // Reset to a clean slate when we start polling a (potentially new) run
+    setState(initialState);
+
+    async function fetchRun() {
+      console.log("[useRunPolling] polling runId:", runId);
+
+      try {
+        const run = await api.get<EncodeRun>(`/api/runs/${runId}`);
+
+        // Guard: the component may have unmounted while the fetch was in-flight
+        if (cancelled) return;
+
+        setState((prev) => {
+          // Requirement 3: don't append the same message twice in a row
+          const lastLog = prev.log[prev.log.length - 1];
+          const newLog =
+            run.message && run.message !== lastLog
+              ? [...prev.log, run.message]
+              : prev.log;
+
+          return {
+            run,
+            polling: !isTerminalStage(run.stage),
+            fetchError: null,
+            log: newLog,
+          };
+        });
+
+        // Requirement 4: stop once terminal and notify the parent page
+        if (isTerminalStage(run.stage)) {
+          clearInterval(intervalId);
+          onFinishedRef.current?.();
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setState((prev) => ({
+          ...prev,
+          fetchError: err instanceof Error ? err.message : "Failed to fetch run",
+          polling: false,
+        }));
+        clearInterval(intervalId);
+      }
+    }
+
+    // Requirement 2: fetch immediately, then once per second
+    setState((prev) => ({ ...prev, polling: true }));
+    fetchRun();
+    const intervalId = setInterval(fetchRun, 1000);
+
+    return () => {               // Requirement 5: THE CLEANUP FUNCTION
+      cancelled = true;          // drop any in-flight response
+      clearInterval(intervalId); // stop future ticks
+    };
+  }, [runId]); // re-runs (with cleanup of old poll) whenever runId changes
 
   return state;
 }
